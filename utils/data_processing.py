@@ -14,6 +14,7 @@ def calculate_value_proposition(
         memory_premium_factors: Dict[str, float],
         gpu_premium_factors: Dict[str, float],
         aib_premium_factors: Dict[str, float],
+        feature_weights: Dict[str, float] = None,
         price_step: Optional[int] = 10
     ) -> pd.DataFrame:
     """
@@ -31,6 +32,8 @@ def calculate_value_proposition(
         Dictionary with GPU brands as keys and premium factors as values
     aib_premium_factors : dict
         Dictionary with AIB brands as keys and premium factors as values
+    feature_weights : dict, optional
+        Dictionary with feature names as keys and weight values (0-100)
     price_step : int, optional
         Price step size, by default 10
 
@@ -50,6 +53,14 @@ def calculate_value_proposition(
     # Return empty dataframe if no base features selected
     if len(enabled_base_features) == 0:
         return pd.DataFrame(columns=['gpu_name', 'price', 'value_score', 'price_type'])
+
+    # Normalize weights if provided
+    if feature_weights is None:
+        # Default: equal weights
+        feature_weights = {feature: 1.0 / len(enabled_base_features) for feature in enabled_base_features}
+    else:
+        # Convert percentage weights to decimals (0-1)
+        feature_weights = {k: v / 100.0 for k, v in feature_weights.items() if k in enabled_base_features}
 
     # Mapping feature names to required numerator columns
     feature_price = {
@@ -88,20 +99,22 @@ def calculate_value_proposition(
         # Calculate value scores for each price point
         for price in price_range:
             value_score = 0
-            # Price Performance Ratios
+            # Price Performance Ratios with weights
             for ui_name, column_name in feature_price.items():
                 if ui_name not in enabled_base_features:
                     continue
                 feature_value = gpu_row[column_name]
-                value_score += feature_value / price
+                weight = feature_weights.get(ui_name, 0)
+                value_score += weight * (feature_value / price)
 
-            # Power Efficiency Ratios
+            # Power Efficiency Ratios with weights
             for ui_name, column_name in feature_power.items():
                 if ui_name not in enabled_base_features:
                     continue
                 feature_value = gpu_row[column_name]
                 power_consumption = gpu_row['tdp']
-                value_score += feature_value / power_consumption
+                weight = feature_weights.get(ui_name, 0)
+                value_score += weight * (feature_value / power_consumption)
 
             # Apply premium factors
             # Memory type premium
