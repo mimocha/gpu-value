@@ -1,6 +1,7 @@
-import altair as alt
 import streamlit as st
 import plotly.express as px
+import pandas as pd
+
 from utils.data_processing import load_data, calculate_value_proposition
 
 ## ========================================================================== ##
@@ -59,22 +60,10 @@ Some data may be missing or inaccurate, so feel free to edit it as needed.
 # Create a section for variable selection (in a collapsible container)
 with st.expander("Variable Selection", expanded=False):
     st.header("Variable Selection")
-
-    # Add price column selection
-    price_column = st.radio(
-        "Select price metric:",
-        options=['actual_price', 'msrp'],
-        format_func=lambda x: x.replace("_", " ").title(),
-        horizontal=True
-    )
-
-    # Add power column selection
-    power_column = st.radio(
-        "Select power metric:",
-        options=['tdp'],
-        format_func=lambda x: x.replace("_", " ").title(),
-        horizontal=True
-    )
+    st.write("""
+Select the features you want to include in the value proposition calculation.
+When multiple features are selected, the value proposition score is calculated as the average of the selected features.
+""")
 
     # Define the features that can be included in the value proposition
     features = {
@@ -102,9 +91,12 @@ with st.expander("Variable Selection", expanded=False):
     st.subheader("Price Premium Factors")
     st.write("""
 Adjustable premium factors for how much more or less you value certain features.
-- Default is 100% (no change)
-- 0% means you do not value GPUs with this feature at all (i.e. you would not even get it for free)
-- 200% means you value GPUs with this feature twice as much (i.e. you would pay double)""")
+- Default is 100% (no effects)
+- 200% means you value GPUs with this feature twice as much (i.e. you would pay double for this feature)
+- Conversely, 50% means you would want a discount of 50% to consider this GPU over an equivalent GPU without this feature
+- Hint: Unselecting a feature and re-selecting it will reset the sliders across each category back to 100%
+- Hint: Adding new categories into the data editor above will automatically add new sliders here
+""")
 
     # Memory Type premium
     memory_type_enabled = st.checkbox("VRAM Type Premium Factor", value=False)
@@ -116,6 +108,7 @@ Adjustable premium factors for how much more or less you value certain features.
         for memory_type in unique_memory_types:
             memory_premium_factors[memory_type] = st.slider(
                 memory_type,
+                key=f"memory_{memory_type}",
                 min_value=0,
                 max_value=200,
                 value=100,  # Default 100%
@@ -132,6 +125,7 @@ Adjustable premium factors for how much more or less you value certain features.
         for brand in unique_gpu_brands:
             gpu_premium_factors[brand] = st.slider(
                 brand,
+                key=f"gpu_{brand}",
                 min_value=0,
                 max_value=200,
                 value=100,  # Default 100%
@@ -148,6 +142,7 @@ Adjustable premium factors for how much more or less you value certain features.
         for brand in unique_aib_brands:
             aib_premium_factors[brand] = st.slider(
                 brand,
+                key=f"aib_{brand}",
                 min_value=0,
                 max_value=200,
                 value=100,  # Default 100%
@@ -155,44 +150,198 @@ Adjustable premium factors for how much more or less you value certain features.
             ) / 100.0  # Convert percentage to multiplier
 
 ## ========================================================================== ##
-## Chart ##
+## Plotting ##
 ## ========================================================================== ##
 
 # Calculate value proposition based on selected features
 result_data = calculate_value_proposition(
     edited_gpu_data,
     enabled_features,
-    price_column,
-    power_column,
     memory_premium_factors,
     gpu_premium_factors,
     aib_premium_factors
 )
 
-# Create the scatter/line plot
-st.header("GPU Value Proposition Curve")
-value_curve = (
-    alt.Chart(
-        result_data,
-        height=800
-    )
-    .mark_line(interpolate='monotone')
-    .encode(
-        x="price:Q",
-        y="value_score:Q",
-        color="gpu_name:N"
-    ))
-st.altair_chart(value_curve, use_container_width=True)
+# Add GPU brand information to result data for coloring
+gpu_to_brand = edited_gpu_data[['gpu_name', 'gpu_brand']].set_index('gpu_name').to_dict()['gpu_brand']
+result_data['gpu_brand'] = result_data['gpu_name'].map(gpu_to_brand)
 
-# TODO: Add scatterplot on top of line plot for actual price points
+# Define color scheme for GPU brands
+color_map = {
+    'NVIDIA': 'green',
+    'AMD': 'red',
+    'Intel': 'blue'
+}
+
+# Create the line plot for curve data
+st.header("GPU Value Proposition Curve")
+
+# Split data for curve and price points
+curve_data = result_data[result_data['price_type'] == 'curve']
+msrp_data = result_data[result_data['price_type'] == 'msrp']
+actual_data = result_data[result_data['price_type'] == 'actual']
+
+# Create base value curve plot
+value_curve = px.line(
+    curve_data,
+    x="price",
+    y="value_score",
+    color="gpu_brand",
+    line_group="gpu_name",  # Group lines by GPU name
+    hover_name="gpu_name",   # Show GPU name on hover
+    height=800,
+    line_shape="spline",
+    color_discrete_map=color_map
+)
+
+# Add triangular scatter plot marker for MSRP prices
+if not msrp_data.empty:
+    msrp_scatter = px.scatter(
+        msrp_data,
+        x="price",
+        y="value_score",
+        color="gpu_brand",
+        hover_name="gpu_name",
+        color_discrete_map=color_map
+    )
+
+    # Update marker properties for MSRP (triangles)
+    for trace in msrp_scatter.data:
+        trace.marker.symbol = "triangle-up"
+        trace.marker.size = 10
+        trace.name = f"{trace.name} (MSRP)"
+        value_curve.add_trace(trace)
+
+# Add round scatter plot marker for actual prices
+if not actual_data.empty:
+    actual_scatter = px.scatter(
+        actual_data,
+        x="price",
+        y="value_score",
+        color="gpu_brand",
+        hover_name="gpu_name",
+        color_discrete_map=color_map
+    )
+
+    # Update marker properties for actual prices (circles)
+    for trace in actual_scatter.data:
+        trace.marker.size = 10
+        trace.name = f"{trace.name} (Actual)"
+        value_curve.add_trace(trace)
+
+# Display the combined plot
+st.plotly_chart(value_curve, use_container_width=True)
+
+## ========================================================================== ##
+## Table ##
+## ========================================================================== ##
+
+st.header("GPU Value Ranking")
+
+# Create a DataFrame for the table with unique GPUs and their best value scores
+if not result_data.empty:
+    # Get the unique GPUs and their highest value scores
+    gpu_table_data = []
+    for gpu_name in result_data['gpu_name'].unique():
+        gpu_data = result_data[result_data['gpu_name'] == gpu_name]
+
+        # Get MSRP and actual prices for this GPU
+        msrp_row = gpu_data[gpu_data['price_type'] == 'msrp']
+        msrp_price = msrp_row['price'].values[0] if not msrp_row.empty else None
+        msrp_score = msrp_row['value_score'].values[0] if not msrp_row.empty else None
+
+        actual_row = gpu_data[gpu_data['price_type'] == 'actual']
+        actual_price = actual_row['price'].values[0] if not actual_row.empty else None
+        actual_score = actual_row['value_score'].values[0] if not actual_row.empty else None
+
+        # Get the highest value score and its corresponding price
+        curve_data = gpu_data[gpu_data['price_type'] == 'curve']
+        if not curve_data.empty:
+            best_value_row = curve_data.loc[curve_data['value_score'].idxmax()]
+            best_value_score = best_value_row['value_score']
+            best_value_price = best_value_row['price']
+        else:
+            # If no curve data, use the highest of MSRP or actual price scores
+            if msrp_score is not None and actual_score is not None:
+                if msrp_score >= actual_score:
+                    best_value_score = msrp_score
+                    best_value_price = msrp_price
+                else:
+                    best_value_score = actual_score
+                    best_value_price = actual_price
+            elif msrp_score is not None:
+                best_value_score = msrp_score
+                best_value_price = msrp_price
+            elif actual_score is not None:
+                best_value_score = actual_score
+                best_value_price = actual_price
+            else:
+                best_value_score = None
+                best_value_price = None
+
+        # Find the GPU brand for this GPU
+        gpu_brand = result_data[result_data['gpu_name'] == gpu_name]['gpu_brand'].values[0]
+
+        # Get the original GPU data
+        original_gpu = edited_gpu_data[edited_gpu_data['gpu_name'] == gpu_name].iloc[0]
+
+        # Add to table data
+        gpu_table_data.append({
+            'GPU': gpu_name,
+            'Brand': gpu_brand,
+            'MSRP ($)': msrp_price,
+            'Actual Price ($)': actual_price,
+            'Best Value Price ($)': best_value_price,
+            'Best Value Score': round(best_value_score, 1) if best_value_score is not None else None,
+            'Avg FPS': original_gpu['avg_fps'],
+            'VRAM (GB)': original_gpu['vram_amount'],
+            'TDP (W)': original_gpu['tdp']
+        })
+
+    # Create DataFrame and sort by value score
+    gpu_table_df = pd.DataFrame(gpu_table_data)
+    gpu_table_df = gpu_table_df.sort_values(by='Best Value Score', ascending=False)
+
+    # Display the table
+    st.dataframe(
+        gpu_table_df,
+        use_container_width=True,
+        column_config={
+            'GPU': st.column_config.TextColumn("GPU Model"),
+            'Brand': st.column_config.TextColumn("Brand"),
+            'MSRP ($)': st.column_config.NumberColumn("MSRP ($)", format="$%d"),
+            'Actual Price ($)': st.column_config.NumberColumn("Actual Price ($)", format="$%d"),
+            'Best Value Price ($)': st.column_config.NumberColumn("Best Value Price ($)", format="$%d"),
+            'Best Value Score': st.column_config.NumberColumn("Value Score", format="%.1f"),
+            'Avg FPS': st.column_config.NumberColumn("Avg FPS", format="%.1f"),
+            'VRAM (GB)': st.column_config.NumberColumn("VRAM (GB)"),
+            'TDP (W)': st.column_config.NumberColumn("TDP (W)")
+        },
+        hide_index=True
+    )
+else:
+    st.write("No data available for ranking. Please select at least one feature.")
+
+## ========================================================================== ##
+## Explanation ##
+## ========================================================================== ##
 
 # Show explanation of the value proposition calculation
 st.header("How the Value Score is Calculated")
-st.write(f"""
-The value proposition score is calculated as a linear function of the selected variables:
+st.write("The value proposition score is calculated as a linear function of the selected variables:")
+
+# Add LaTeX formula for the value proposition calculation
+st.latex(r'''
+\text{Value Score} = \left( \sum_{i \in \text{PriceFeatures}} \frac{\text{Feature}_i}{\text{Price}} + \sum_{j \in \text{PowerFeatures}} \frac{\text{Feature}_j}{\text{TDP}} \right) \times \prod_{k \in \text{PremiumFactors}} \text{Factor}_k
+''')
+
+st.write("""
+Where:
+- 'Price Features': Performance per dollar metrics (Avg FPS, Bottom 1% FPS, Bottom 0.1% FPS, and VRAM amount divided by price)
+- 'Power Features': Performance per wattage metrics (same performance metrics divided by power consumption)
+- 'Premium Factors': Optional multipliers for memory type, GPU brand, and AIB brand preferences
+
+The formula calculates:
 - All enabled variables are weighted equally
-- Variables are normalized before calculation
-- {price_column.replace("_", " ").title()} is used for price-dependent calculations
-- Final score is expressed as a percentage (0-100%)
-- Higher scores represent better value propositions
+- Scores are expressed as percentage, normalized to 100%, with higher scores indicating better value propositions
 """)

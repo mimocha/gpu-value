@@ -1,4 +1,4 @@
-from typing import Literal, Dict, Optional
+from typing import Dict, Optional
 
 import pandas as pd
 import numpy as np
@@ -11,13 +11,9 @@ def load_data(file_path: str) -> pd.DataFrame:
 def calculate_value_proposition(
         data: pd.DataFrame,
         enabled_features: dict,
-        price_feature: Literal['actual_price','msrp'],
-        power_feature: Literal['tdp'],
         memory_premium_factors: Dict[str, float],
         gpu_premium_factors: Dict[str, float],
         aib_premium_factors: Dict[str, float],
-        price_min: Optional[int] = 100,
-        price_max: Optional[int] = 2001,
         price_step: Optional[int] = 10
     ) -> pd.DataFrame:
     """
@@ -28,22 +24,13 @@ def calculate_value_proposition(
     data : pandas.DataFrame
         The GPU dataset
     enabled_features : dict
-        Dictionary with feature names as keys and boolean values
-        indicating if they're enabled
-    price_feature : str
-        The name of the column to use for price-based calculations ('actual_price' or 'msrp')
-    power_feature : str
-        The name of the column to use for power-based calculations ('tdp')
+        Dictionary with feature names as keys and boolean values indicating if they're enabled
     memory_premium_factors : dict
         Dictionary with memory types as keys and premium factors as values
     gpu_premium_factors : dict
         Dictionary with GPU brands as keys and premium factors as values
     aib_premium_factors : dict
         Dictionary with AIB brands as keys and premium factors as values
-    price_min : int, optional
-        Minimum price to consider, by default 100
-    price_max : int, optional
-        Maximum price to consider, by default 2001
     price_step : int, optional
         Price step size, by default 10
 
@@ -52,25 +39,17 @@ def calculate_value_proposition(
     pandas.DataFrame
         Processed data in long form, with columns 'price', 'value_score', and GPU names
     """
-    # Unique GPU names
-    gpu_names = data['gpu_name'].unique()
-    # Generate Price Range (shape: (num_prices, 1))
-    price_range = np.arange(price_min, price_max, price_step)
+    # Select base features for calculation (i.e. non-price-premium features)
+    premium_features: set = {'memory_type', 'gpu_brand', 'aib_brand'}
+    enabled_base_features: list[str] = [feat for feat, enabled in enabled_features.items() if enabled and feat not in premium_features]
+    enabled_premium_features: list[str] = [feat for feat, enabled in enabled_features.items() if enabled and feat in premium_features]
 
-    # Initialize working dataframe, using wide-form for easier calculation
-    df_wide_form = pd.DataFrame({'price': price_range})
-    for gpu_name in gpu_names:
-        df_wide_form[gpu_name] = 0
+    # Initialize results dataframe in long-form
+    results = []
 
-    # Select base features for calculation (exclude premium features)
-    base_features = [feature for feature in enabled_features if feature not in ['memory_type', 'gpu_brand', 'aib_brand']]
-    # Return zero scores if no base features selected
-    if len(base_features) == 0:
-        return df_wide_form.melt(id_vars='price', var_name='gpu_name', value_name='value_score')
-
-    # ======================================================================== #
-    # Calculate value score
-    # ======================================================================== #
+    # Return empty dataframe if no base features selected
+    if len(enabled_base_features) == 0:
+        return pd.DataFrame(columns=['gpu_name', 'price', 'value_score', 'price_type'])
 
     # Mapping feature names to required numerator columns
     feature_price = {
@@ -85,78 +64,122 @@ def calculate_value_proposition(
         'efficiency_bottom_01': 'bottom_01_fps',
     }
 
-    for gpu_name in gpu_names:
-        # Price Performance Ratios
-        # For each enabled feature, prepare the matrix of feature values (shape: (num_features, 1))
-        feature_vector = []
-        for ui_name,column_name in feature_price.items():
-            # Skip if feature not enabled
-            if ui_name not in base_features:
-                continue
-            mask = (data['gpu_name'] == gpu_name).values
-            feature_vector.append(data.loc[mask, column_name].values)
-        if len(feature_vector) > 0:
-            # Convert to shape: (1, num_features)
-            feature_vector = np.array(feature_vector).reshape(1, -1)
-            # Dot product (division) calculation (shape: (num_prices, 1) @ (1, num_features) = (num_prices, num_features))
-            value_score = (1/price_range).reshape(-1,1) @ feature_vector
-            # Sum by feature (shape: (num_prices, 1))
-            value_score = value_score.sum(axis=1)
-            # Store results in wide-form dataframe
-            df_wide_form[gpu_name] += value_score
+    # Process each GPU separately
+    for _, gpu_row in data.iterrows():
+        gpu_name = gpu_row['gpu_name']
+        msrp = gpu_row['msrp']
+        actual_price = gpu_row['actual_price']
 
-        # Power Efficiency Ratios
-        # For each enabled feature, prepare the matrix of feature values (shape: (num_features, 1))
-        feature_vector = []
-        for ui_name,column_name in feature_power.items():
-            # Skip if feature not enabled
-            if ui_name not in base_features:
-                continue
-            mask = (data['gpu_name'] == gpu_name).values
-            feature_vector.append(data.loc[mask, column_name].values)
-        if len(feature_vector) > 0:
-            # Shape: (1, num_features)
-            feature_vector = np.array(feature_vector)
-            # Power consumption (shape: scalar)
-            power_consumption = data.loc[mask, power_feature].values
-            # Divide by power consumption
-            efficiency_score = feature_vector / power_consumption
-            # Sum all and store results in wide-form dataframe
-            df_wide_form[gpu_name] += efficiency_score.sum()
+        # Generate price range between MSRP and actual_price (if available)
+        if (not pd.isna(actual_price)) and (not pd.isna(msrp)):
+            min_price = min(msrp, actual_price)
+            max_price = max(msrp, actual_price)
+            price_range = np.arange(min_price, max_price + price_step, price_step)
+        elif (not pd.isna(msrp)):
+            # If actual_price is missing, just use MSRP as a single point
+            price_range = np.array([msrp])
+        elif (not pd.isna(actual_price)):
+            # If MSRP is missing, just use actual_price as a single point
+            price_range = np.array([actual_price])
+        else:
+            # Both prices are missing, skip
+            continue
 
-    # ======================================================================== #
-    # Apply premium scaling factors
-    # ======================================================================== #
+        # Calculate value scores for each price point
+        for price in price_range:
+            value_score = 0
+            # Price Performance Ratios
+            for ui_name, column_name in feature_price.items():
+                if ui_name not in enabled_base_features:
+                    continue
+                feature_value = gpu_row[column_name]
+                value_score += feature_value / price
 
-    # Memory type premium
-    if 'memory_type' in enabled_features.keys():
-        for memory_type, factor in memory_premium_factors.items():
-            mask = (data['memory_type'] == memory_type)
-            applicable_gpus = data[mask]['gpu_name'].values
-            df_wide_form[applicable_gpus] *= factor
+            # Power Efficiency Ratios
+            for ui_name, column_name in feature_power.items():
+                if ui_name not in enabled_base_features:
+                    continue
+                feature_value = gpu_row[column_name]
+                power_consumption = gpu_row['tdp']
+                value_score += feature_value / power_consumption
 
-    # GPU brand premium
-    if 'gpu_brand' in enabled_features.keys():
-        for brand, factor in gpu_premium_factors.items():
-            mask = data['gpu_brand'] == brand
-            applicable_gpus = data[mask]['gpu_name'].values
-            df_wide_form[applicable_gpus] *= factor
+            # Apply premium factors
+            # Memory type premium
+            if 'memory_type' in enabled_premium_features:
+                memory_type = gpu_row['memory_type']
+                if memory_type in memory_premium_factors:
+                    value_score *= memory_premium_factors[memory_type]
 
-    # AIB brand premium
-    if 'aib_brand' in enabled_features.keys():
-        for brand, factor in aib_premium_factors.items():
-            mask = data['aib_brand'] == brand
-            applicable_gpus = data[mask]['gpu_name'].values
-            df_wide_form[applicable_gpus] *= factor
+            # GPU brand premium
+            if 'gpu_brand' in enabled_premium_features:
+                brand = gpu_row['gpu_brand']
+                if brand in gpu_premium_factors:
+                    value_score *= gpu_premium_factors[brand]
 
-    # ======================================================================== #
-    # Normalize scores to 0-100 range, and return long-form dataframe
-    # ======================================================================== #
+            # AIB brand premium
+            if 'aib_brand' in enabled_premium_features:
+                brand = gpu_row['aib_brand']
+                if brand in aib_premium_factors:
+                    value_score *= aib_premium_factors[brand]
 
-    # Melt wide-form dataframe to long-form
-    df_long_form = df_wide_form.melt(id_vars='price', var_name='gpu_name', value_name='value_score')
+            # Add to results
+            results.append({
+                'gpu_name': gpu_name,
+                'price': price,
+                'value_score': value_score,
+                'price_type': 'curve'  # This helps identify points vs curve in plotting
+            })
 
-    # Normalize to 0-100 range
-    df_long_form['value_score'] = MinMaxScaler(feature_range=(0, 100)).fit_transform(df_long_form['value_score'].values.reshape(-1,1))
+        # Add MSRP and actual_price as specific points
+        if not pd.isna(msrp):
+            results.append({
+                'gpu_name': gpu_name,
+                'price': msrp,
+                'value_score': None,  # Will be filled later
+                'price_type': 'msrp'
+            })
 
-    return df_long_form
+        if not pd.isna(actual_price):
+            results.append({
+                'gpu_name': gpu_name,
+                'price': actual_price,
+                'value_score': None,  # Will be filled later
+                'price_type': 'actual'
+            })
+
+    # Convert results to DataFrame
+    df_results = pd.DataFrame(results)
+
+    # If no results, return empty DataFrame
+    if len(df_results) == 0:
+        return df_results
+
+    # Normalize to 0-100 range, if there are curve points to scale
+    scaler = MinMaxScaler(feature_range=(0, 100))
+    curve_mask = df_results['price_type'] == 'curve'
+    if curve_mask.any():
+        df_results.loc[curve_mask, 'value_score'] = scaler.fit_transform(
+            df_results.loc[curve_mask, 'value_score'].values.reshape(-1, 1)
+        ).flatten()
+
+        # Calculate value scores for MSRP and actual price points
+        for gpu_name in df_results['gpu_name'].unique():
+            gpu_curve = df_results[(df_results['gpu_name'] == gpu_name) & (df_results['price_type'] == 'curve')]
+
+            # Fill MSRP value score
+            msrp_mask = (df_results['gpu_name'] == gpu_name) & (df_results['price_type'] == 'msrp')
+            if msrp_mask.any():
+                msrp_price = df_results.loc[msrp_mask, 'price'].values[0]
+                closest_curve_point = gpu_curve.iloc[(gpu_curve['price'] - msrp_price).abs().argsort()[:1]]
+                if not closest_curve_point.empty:
+                    df_results.loc[msrp_mask, 'value_score'] = closest_curve_point['value_score'].values[0]
+
+            # Fill actual price value score
+            actual_mask = (df_results['gpu_name'] == gpu_name) & (df_results['price_type'] == 'actual')
+            if actual_mask.any():
+                actual_price = df_results.loc[actual_mask, 'price'].values[0]
+                closest_curve_point = gpu_curve.iloc[(gpu_curve['price'] - actual_price).abs().argsort()[:1]]
+                if not closest_curve_point.empty:
+                    df_results.loc[actual_mask, 'value_score'] = closest_curve_point['value_score'].values[0]
+
+    return df_results
