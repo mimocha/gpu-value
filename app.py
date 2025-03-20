@@ -377,7 +377,7 @@ st.plotly_chart(value_curve, use_container_width=True)
 ## ========================================================================== ##
 
 # Create a section for GPU value ranking table (in a collapsible container)
-with st.expander("GPU Value Ranking", expanded=False):
+with st.expander("GPU Value Ranking", expanded=True):
     st.header("GPU Value Ranking")
 
     # Create a DataFrame for the table with unique GPUs and their best value scores
@@ -395,25 +395,6 @@ with st.expander("GPU Value Ranking", expanded=False):
             actual_row = gpu_data[gpu_data['price_type'] == 'actual']
             actual_price = actual_row['price'].values[0] if not actual_row.empty else None
             actual_score = actual_row['value_score'].values[0] if not actual_row.empty else None
-
-            # Get the highest value score and its corresponding price
-            curve_data = gpu_data[gpu_data['price_type'] == 'curve']
-            if not curve_data.empty:
-                best_value_row = curve_data.loc[curve_data['value_score'].idxmax()]
-                best_value_score = best_value_row['value_score']
-            else:
-                # If no curve data, use the highest of MSRP or actual price scores
-                if msrp_score is not None and actual_score is not None:
-                    if msrp_score >= actual_score:
-                        best_value_score = msrp_score
-                    else:
-                        best_value_score = actual_score
-                elif msrp_score is not None:
-                    best_value_score = msrp_score
-                elif actual_score is not None:
-                    best_value_score = actual_score
-                else:
-                    best_value_score = None
 
             # Get the original GPU data
             original_gpu = edited_gpu_data[edited_gpu_data['gpu_name'] == gpu_name].iloc[0]
@@ -440,7 +421,7 @@ with st.expander("GPU Value Ranking", expanded=False):
             # Add to table data
             gpu_table_data.append({
                 'GPU': gpu_name,
-                'Value Score': round(best_value_score, 1) if best_value_score is not None else None,
+                'Value Score': round(actual_score, 1) if actual_score is not None else None,
                 'Actual Price ($)': actual_price,
                 'MSRP ($)': msrp_price,
                 'Avg FPS': original_gpu['avg_fps'],
