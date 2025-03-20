@@ -54,12 +54,16 @@ Some data may be missing or inaccurate, so feel free to edit it as needed.
     )
 
 ## ========================================================================== ##
-## Variable Selection ##
+## Base Feature Selection ##
 ## ========================================================================== ##
 
-# Create a section for variable selection (in a collapsible container)
-with st.expander("Feature Selection", expanded=False):
-    st.header("Feature Selection")
+# Create a section for feature selection (in a collapsible container)
+with st.expander("Base Feature Selection", expanded=False):
+    st.header("Base Feature Selection")
+    st.write("""
+Select the features you want to include in the value proposition calculation, then assign weights for how important the features are.
+When multiple features are selected, the value proposition score is calculated using a weighted average.
+""")
 
     # Define the base features that can be included in the value proposition
     features = {
@@ -73,11 +77,6 @@ with st.expander("Feature Selection", expanded=False):
     }
 
     # Create a single column for feature selection
-    st.subheader("Performance & Efficiency Features")
-    st.write("""
-Select the features you want to include in the value proposition calculation, then assign weights for how important the features are.
-When multiple features are selected, the value proposition score is calculated using a weighted average.
-""")
     enabled_features = {}
     feature_weights = {}
 
@@ -113,8 +112,113 @@ When multiple features are selected, the value proposition score is calculated u
     if not valid_weights and sum(enabled_features.values()) > 0:
         st.error(f"⚠️ Feature weights must add up to 100% (current total: {total_weight}%)")
 
-    # Handle categorical features with premium factors
-    st.subheader("Price Premium Factors")
+## ========================================================================== ##
+## Feature Requirements ##
+## ========================================================================== ##
+
+# Create a section for feature selection (in a collapsible container)
+with st.expander("Feature Requirements", expanded=False):
+    st.header("Feature Requirements")
+    st.write("""
+Select the minimum requirements for each feature to be considered in the value proposition calculation.
+GPUs that don't meet these requirements will be displayed with reduced opacity in the chart and greyed out in the ranking table.
+""")
+
+    # Initialize feature requirements dictionary
+    feature_requirements = {}
+
+    # Minimum Average FPS requirement
+    min_avg_fps_enabled = st.checkbox("Minimum Average FPS", value=False)
+    if min_avg_fps_enabled:
+        min_avg_fps = st.number_input(
+            "Minimum Average FPS",
+            min_value=0,
+            max_value=500,
+            value=60,
+            step=5
+        )
+        feature_requirements['avg_fps'] = min_avg_fps
+
+    # Minimum Bottom 1% FPS requirement
+    min_bottom_1_fps_enabled = st.checkbox("Minimum Bottom 1% FPS", value=False)
+    if min_bottom_1_fps_enabled:
+        min_bottom_1_fps = st.number_input(
+            "Minimum Bottom 1% FPS",
+            min_value=0,
+            max_value=500,
+            value=60,
+            step=5
+        )
+        feature_requirements['bottom_1_fps'] = min_bottom_1_fps
+
+    # Minimum Bottom 0.1% FPS requirement
+    min_bottom_01_fps_enabled = st.checkbox("Minimum Bottom 0.1% FPS", value=False)
+    if min_bottom_01_fps_enabled:
+        min_bottom_01_fps = st.number_input(
+            "Minimum Bottom 0.1% FPS",
+            min_value=0,
+            max_value=500,
+            value=60,
+            step=5
+        )
+        feature_requirements['bottom_01_fps'] = min_bottom_01_fps
+
+    # Minimum VRAM requirement
+    min_vram_enabled = st.checkbox("Minimum VRAM (GB)", value=False)
+    if min_vram_enabled:
+        min_vram = st.number_input(
+            "Minimum VRAM (GB)",
+            min_value=0,
+            max_value=64,
+            value=8,
+            step=1
+        )
+        feature_requirements['vram_amount'] = min_vram
+
+    # Maximum Price requirement
+    max_price_enabled = st.checkbox("Maximum Price ($)", value=False)
+    if max_price_enabled:
+        max_price = st.number_input(
+            "Maximum Price ($)",
+            min_value=0,
+            max_value=5000,
+            value=1000,
+            step=50
+        )
+        feature_requirements['max_price'] = max_price
+
+# Function to check if a GPU meets all enabled requirements
+def meets_requirements(gpu_data, requirements):
+    if not requirements:
+        return True
+
+    for feature, requirement_value in requirements.items():
+        if feature == 'max_price':
+            # For price, we only check the actual price -- if not available, the GPU is not compliant
+            actual_price = gpu_data.get('actual_price')
+            if pd.isna(actual_price) or actual_price > requirement_value:
+                return False
+
+        else:
+            # For other features, just check if they're below the minimum requirement
+            if pd.isna(gpu_data[feature]) or gpu_data[feature] < requirement_value:
+                return False
+
+    return True
+
+# Create a list of GPUs that meet requirements
+compliant_gpus = []
+for _, gpu in edited_gpu_data.iterrows():
+    if meets_requirements(gpu, feature_requirements):
+        compliant_gpus.append(gpu['gpu_name'])
+
+## ========================================================================== ##
+## Price Premium Feature ##
+## ========================================================================== ##
+
+# Create a section for price premium feature (in a collapsible container)
+with st.expander("Price Premium Feature", expanded=False):
+    st.header("Price Premium Feature")
     st.write("""
 Adjustable premium factors for how much more or less you value certain features.
 - Default is 100% (no effects)
@@ -221,6 +325,12 @@ value_curve = px.line(
     color_discrete_map=color_map
 )
 
+# Apply opacity to non-compliant GPUs for line chart
+for trace in value_curve.data:
+    gpu_name = trace.hovertext[0]
+    if gpu_name not in compliant_gpus:
+        trace.opacity = 0.25
+
 # Add triangular scatter plot marker for MSRP prices
 if not msrp_data.empty:
     msrp_scatter = px.scatter(
@@ -237,6 +347,8 @@ if not msrp_data.empty:
         trace.marker.symbol = "triangle-up"
         trace.marker.size = 10
         trace.name = f"{trace.name} (MSRP)"
+        trace.opacity = 0.5
+
         value_curve.add_trace(trace)
 
 # Add round scatter plot marker for actual prices
@@ -254,6 +366,7 @@ if not actual_data.empty:
     for trace in actual_scatter.data:
         trace.marker.size = 10
         trace.name = f"{trace.name} (Actual)"
+        trace.opacity = 0.5
         value_curve.add_trace(trace)
 
 # Display the combined plot
@@ -321,6 +434,9 @@ with st.expander("GPU Value Ranking", expanded=False):
             # Calculate VRAM per dollar
             vram_per_dollar = original_gpu['vram_amount'] / price_for_calc if price_for_calc else None
 
+            # Check if GPU meets requirements
+            meets_reqs = gpu_name in compliant_gpus
+
             # Add to table data
             gpu_table_data.append({
                 'GPU': gpu_name,
@@ -337,16 +453,27 @@ with st.expander("GPU Value Ranking", expanded=False):
                 'Bottom 1% FPS/Watt': round(bottom_1_fps_per_watt, 3) if bottom_1_fps_per_watt else None,
                 'Bottom 0.1% FPS/Watt': round(bottom_01_fps_per_watt, 3) if bottom_01_fps_per_watt else None,
                 'VRAM (GB)': original_gpu['vram_amount'],
-                'VRAM (GB)/Dollar': round(vram_per_dollar, 3) if vram_per_dollar else None
+                'VRAM (GB)/Dollar': round(vram_per_dollar, 3) if vram_per_dollar else None,
+                'Meets Requirements': meets_reqs
             })
 
         # Create DataFrame and sort by value score
         gpu_table_df = pd.DataFrame(gpu_table_data)
         gpu_table_df = gpu_table_df.sort_values(by='Value Score', ascending=False)
 
+        # Apply styling to grey out rows that don't meet requirements
+        def style_row(row):
+            if not row['Meets Requirements']:
+                return ['color: #AAAAAA'] * len(row)
+            return [''] * len(row)
+
+        # styled_table_df = gpu_table_df.drop(columns=['Meets Requirements'])
+        styled_table_df = gpu_table_df.copy()
+        styled_table = styled_table_df.style.apply(style_row, axis=1)
+
         # Display the table
         st.dataframe(
-            gpu_table_df,
+            styled_table,
             use_container_width=True,
             column_config={
                 'GPU': st.column_config.TextColumn("GPU Model"),
@@ -363,7 +490,8 @@ with st.expander("GPU Value Ranking", expanded=False):
                 'Bottom 1% FPS/Watt': st.column_config.NumberColumn("Bottom 1% FPS/Watt", format="%.3f"),
                 'Bottom 0.1% FPS/Watt': st.column_config.NumberColumn("Bottom 0.1% FPS/Watt", format="%.3f"),
                 'VRAM (GB)': st.column_config.NumberColumn("VRAM (GB)", format="%d"),
-                'VRAM (GB)/Dollar': st.column_config.NumberColumn("VRAM (GB)/Dollar", format="%.3f")
+                'VRAM (GB)/Dollar': st.column_config.NumberColumn("VRAM (GB)/Dollar", format="%.3f"),
+                'Meets Requirements': st.column_config.NumberColumn("Meets Requirements"),
             },
             hide_index=True
         )
