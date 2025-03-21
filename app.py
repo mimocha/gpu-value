@@ -24,31 +24,42 @@ gpu_data = get_gpu_data()
 ## Title ##
 ## ========================================================================== ##
 
-st.title("GPU Value Proposition Curve")
+st.title("GPU Value Proposition Chart")
 st.write("""
-How much do you value a certain GPU?
-This tool helps you visualize the value proposition of different GPUs based on their price and performance.""")
+_How much do you value a certain GPU?_
+
+This is an experimental tool for evaluating a GPU's value proposition, inspired by Gamer's Nexus.
+It is essentially a glorified FPS/Dollar calculator, but with additional features and parameters.
+
+The GPU dataset is transcribed from the Gamer's Nexus RX 9070 Review (FFXIV 4K Benchmark), and combined with data automatically collected from TechPowerUp.
+Actual GPU price data is collected from the very scientific method of checking on eBay, and copying the first legit looking price I see.
+- [GamersNexus Source](https://gamersnexus.net/gpus/incredibly-efficient-amd-rx-9070-gpu-review-benchmarks-vs-9070-xt-rtx-5070#9070-benchmarks)
+- [TechPowerUp Source](https://www.techpowerup.com/gpu-specs/)
+
+You should expect the performance and price data to be inaccurate,
+but you can add your own data and see how different GPUs stack up against each other.
+
+If you are interested in the code, you can find and fork it on [GitHub](https://github.com/mimocha/gpu-value).
+Though I would recommend not looking at it because its a complete mess.
+Starting from scratch would probably be a better idea, since the idea itself isn't that complicated.
+""")
 
 ## ========================================================================== ##
 ## Data Editor ##
 ## ========================================================================== ##
 
 # Create a section for GPU data editing (in a collapsible container)
-with st.expander("GPU Data Editor", expanded=False):
+with st.expander("GPU Data Editor", expanded=False, icon="📝"):
     st.header("GPU Data Editor")
     st.write("""
 You can add and edit GPU data in the table below. Changes will be reflected in the chart automatically.
-This GPU dataset is transcribed from the Gamer's Nexus RX 9070 Review, FFXIV 4K Benchmark, and combined with data automatically collected from TechPowerUp.
-Some data may be missing or inaccurate, so feel free to edit it as needed.
-- [GamersNexus Source](https://gamersnexus.net/gpus/incredibly-efficient-amd-rx-9070-gpu-review-benchmarks-vs-9070-xt-rtx-5070#9070-benchmarks)
-- [TechPowerUp Source](https://www.techpowerup.com/gpu-specs/)
 """)
 
     # Create a dataframe for editing
     edited_gpu_data = st.data_editor(
         gpu_data,
         num_rows="dynamic",
-        use_container_width=True,
+        use_container_width=False,
         hide_index=True,
         key="data_editor"
     )
@@ -58,7 +69,7 @@ Some data may be missing or inaccurate, so feel free to edit it as needed.
 ## ========================================================================== ##
 
 # Create a section for feature selection (in a collapsible container)
-with st.expander("Base Feature Selection", expanded=False):
+with st.expander("Base Feature Selection", expanded=False, icon="✅"):
     st.header("Base Feature Selection")
     st.write("""
 Select the features you want to include in the value proposition calculation, then assign weights for how important the features are.
@@ -113,14 +124,14 @@ When multiple features are selected, the value proposition score is calculated u
         st.error(f"⚠️ Feature weights must add up to 100% (current total: {total_weight}%)")
 
 ## ========================================================================== ##
-## Feature Requirements ##
+## Requirements Section ##
 ## ========================================================================== ##
 
-# Create a section for feature selection (in a collapsible container)
-with st.expander("Feature Requirements", expanded=False):
-    st.header("Feature Requirements")
+# Create a section for requirements (in a collapsible container)
+with st.expander("Requirements", expanded=False, icon="🛠️"):
+    st.header("Requirements")
     st.write("""
-Select the minimum requirements for each feature to be considered in the value proposition calculation.
+You can set the minimum / maximum requirements for GPUs to be considered in the value proposition calculation.
 GPUs that don't meet these requirements will be displayed with reduced opacity in the chart and greyed out in the ranking table.
 """)
 
@@ -134,7 +145,7 @@ GPUs that don't meet these requirements will be displayed with reduced opacity i
             "Minimum Average FPS",
             min_value=0,
             max_value=500,
-            value=60,
+            value=120,
             step=5
         )
         feature_requirements['avg_fps'] = min_avg_fps
@@ -188,20 +199,20 @@ GPUs that don't meet these requirements will be displayed with reduced opacity i
         feature_requirements['max_price'] = max_price
 
 # Function to check if a GPU meets all enabled requirements
-def meets_requirements(gpu_data, requirements):
+def meets_requirements(data, requirements):
     if not requirements:
         return True
 
-    for feature, requirement_value in requirements.items():
-        if feature == 'max_price':
+    for _feature, requirement_value in requirements.items():
+        if _feature == 'max_price':
             # For price, we only check the actual price -- if not available, the GPU is not compliant
-            actual_price = gpu_data.get('actual_price')
-            if pd.isna(actual_price) or actual_price > requirement_value:
+            _actual_price = data.get('actual_price')
+            if pd.isna(_actual_price) or _actual_price > requirement_value:
                 return False
 
         else:
             # For other features, just check if they're below the minimum requirement
-            if pd.isna(gpu_data[feature]) or gpu_data[feature] < requirement_value:
+            if pd.isna(data[_feature]) or data[_feature] < requirement_value:
                 return False
 
     return True
@@ -217,7 +228,7 @@ for _, gpu in edited_gpu_data.iterrows():
 ## ========================================================================== ##
 
 # Create a section for price premium feature (in a collapsible container)
-with st.expander("Price Premium Feature", expanded=False):
+with st.expander("Price Premium Feature", expanded=False, icon="💰"):
     st.header("Price Premium Feature")
     st.write("""
 Adjustable premium factors for how much more or less you value certain features.
@@ -283,6 +294,20 @@ Adjustable premium factors for how much more or less you value certain features.
 ## Plotting ##
 ## ========================================================================== ##
 
+# Create the line plot for curve data
+st.header("GPU Value Chart")
+st.write("""
+This chart shows the "value proposition score" of each GPU based on the parameters above.
+The scores are normalized to a scale of 0 to 100, with higher scores meaning better value.
+
+Essentially, "top-left" is better, and "bottom-right" is worse.
+
+The chart will calculate the value score for each possible price point, and draw a curve between the MSRP and the actual price.
+This should illustrate how the value of a GPU changes as the price changes.
+- 🔴 Circle markers are the Actual GPU Price
+- 🔺 Triangle markers are the GPU MSRP Price
+""")
+
 # Calculate value proposition based on selected features
 result_data = calculate_value_proposition(
     edited_gpu_data,
@@ -304,9 +329,6 @@ color_map = {
     'Intel': 'blue'
 }
 
-# Create the line plot for curve data
-st.header("GPU Value Proposition Curve")
-
 # Split data for curve and price points
 curve_data = result_data[result_data['price_type'] == 'curve']
 msrp_data = result_data[result_data['price_type'] == 'msrp']
@@ -322,15 +344,30 @@ value_curve = px.line(
     hover_name="gpu_name",   # Show GPU name on hover
     height=800,
     line_shape="spline",
-    color_discrete_map=color_map
+    color_discrete_map=color_map,
+    labels={
+        'price': "GPU Price ($)",
+        'value_score': "Value Score (0-100%)",
+        'gpu_brand': "GPU Brand"
+    }
+)
+
+value_curve.update_layout(
+    xaxis=dict(
+        showline=True,
+        showgrid=True),
+    yaxis=dict(
+        showline=True,
+        showgrid=True)
 )
 
 # Apply opacity to non-compliant GPUs for line chart
 for trace in value_curve.data:
     gpu_name = trace.hovertext[0]
     if gpu_name not in compliant_gpus:
-        trace.opacity = 0.25
+        trace.opacity = 0.15
 
+# NOTE: can't edit opacity for individual markers, because 'trace.opacity' controls the opacity for every GPU?
 # Add triangular scatter plot marker for MSRP prices
 if not msrp_data.empty:
     msrp_scatter = px.scatter(
@@ -348,7 +385,6 @@ if not msrp_data.empty:
         trace.marker.size = 10
         trace.name = f"{trace.name} (MSRP)"
         trace.opacity = 0.5
-
         value_curve.add_trace(trace)
 
 # Add round scatter plot marker for actual prices
@@ -366,7 +402,7 @@ if not actual_data.empty:
     for trace in actual_scatter.data:
         trace.marker.size = 10
         trace.name = f"{trace.name} (Actual)"
-        trace.opacity = 0.5
+        trace.opacity = 1
         value_curve.add_trace(trace)
 
 # Display the combined plot
@@ -377,8 +413,12 @@ st.plotly_chart(value_curve, use_container_width=True)
 ## ========================================================================== ##
 
 # Create a section for GPU value ranking table (in a collapsible container)
-with st.expander("GPU Value Ranking", expanded=True):
+with st.expander("GPU Value Ranking", expanded=True, icon="🏆"):
     st.header("GPU Value Ranking")
+    st.write("""
+Table of GPU data, sorted by value score by default. You can sort by any column by clicking on the column header.\n
+Greyed out rows indicate that the GPU does not meet the minimum requirements set above.
+""")
 
     # Create a DataFrame for the table with unique GPUs and their best value scores
     if not result_data.empty:
@@ -485,7 +525,10 @@ with st.expander("GPU Value Ranking", expanded=True):
 
 # Show explanation of the value proposition calculation
 st.header("How the Value Score is Calculated")
-st.write("The value proposition score is calculated as a linear function of the selected variables:")
+st.write("""
+The value proposition score is calculated as a linear function of the selected variables.
+Here is a scientific formula that describes the calculation (basically just a weighted sum, multiplied by the premium factors):
+""")
 
 # Add LaTeX formula for the value proposition calculation
 st.latex(r'''
@@ -498,8 +541,4 @@ Where:
 - **Importance**: User-assigned weights for each price feature
 - **Power Features**: Performance per wattage metrics (same performance metrics divided by power consumption)
 - **Premium Factors**: Optional multipliers for memory type, GPU brand, and AIB brand preferences
-
-The formula calculates:
-- All enabled variables are weighted equally
-- Scores are expressed as percentage, normalized to 100%, with higher scores indicating better value propositions
 """)
